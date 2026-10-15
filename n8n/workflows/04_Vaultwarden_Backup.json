@@ -1,0 +1,347 @@
+{
+  "name": "Vaultwarden - Backup Export (SSH -> Google Drive, keep 5 daily + 1 monthly)",
+  "nodes": [
+    {
+      "name": "Daily 01:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        400
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 1 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        490,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1b5d7468-b423-4d33-a943-64677f8d3060",
+              "name": "backupDir",
+              "value": "/home/backupuser/VaultWarden/Backups",
+              "type": "string"
+            },
+            {
+              "id": "6a3b11bf-583e-4f93-b479-da4bc978d73d",
+              "name": "driveFolderId",
+              "value": "PASTE_GOOGLE_DRIVE_FOLDER_ID",
+              "type": "string"
+            },
+            {
+              "id": "c8385139-6c58-472b-a13c-0a0750dd997d",
+              "name": "keepDaily",
+              "value": 5,
+              "type": "number"
+            },
+            {
+              "id": "12baf612-0905-4c57-b077-046e1e4e34e8",
+              "name": "keepMonthly",
+              "value": 1,
+              "type": "number"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Find Latest Backup",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        730,
+        400
+      ],
+      "parameters": {
+        "authentication": "password",
+        "command": "=ls -1t {{ $('Config').first().json.backupDir }}/vw-data-*.tar.gz | head -n 1"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Download Backup",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [
+        970,
+        400
+      ],
+      "parameters": {
+        "authentication": "password",
+        "resource": "file",
+        "operation": "download",
+        "path": "={{ $json.stdout.trim() }}",
+        "binaryPropertyName": "data"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "List Existing Backups",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1210,
+        400
+      ],
+      "parameters": {
+        "resource": "fileFolder",
+        "searchMethod": "query",
+        "queryString": "='{{ $('Config').first().json.driveFolderId }}' in parents and name contains 'vw_' and trashed = false",
+        "returnAll": true,
+        "filter": {},
+        "options": {}
+      },
+      "alwaysOutputData": true,
+      "executeOnce": true
+    },
+    {
+      "name": "Plan Uploads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// backup.sh names files vw-data-MM-DD-YY.tar.gz; store as sortable vw_daily_YYYY-MM-DD / vw_monthly_YYYY-MM.\nconst path = $('Find Latest Backup').first().json.stdout.trim();\nconst m = path.match(/vw-data-(\\d\\d)-(\\d\\d)-(\\d\\d)\\.tar\\.gz$/);\nif (!m) throw new Error(`Unexpected backup file name: ${path}`);\nconst [, mm, dd, yy] = m;\nconst binary = $('Download Backup').first().binary;\nconst existing = $('List Existing Backups').all().map(i => i.json.name).filter(Boolean);\nconst wanted = [`vw_daily_20${yy}-${mm}-${dd}.tar.gz`, `vw_monthly_20${yy}-${mm}.tar.gz`];\n// Daily: skip if already exported. Monthly: first backup seen each month (survives a missed run on the 1st).\nreturn wanted.filter(name => !existing.includes(name)).map(fileName => ({ json: { fileName }, binary }));"
+      }
+    },
+    {
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1690,
+        400
+      ],
+      "parameters": {
+        "name": "={{ $json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Config').first().json.driveFolderId }}"
+        },
+        "inputDataFieldName": "data",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "name": "Pick Old Backups",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1930,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Retention: keep newest N daily + newest M monthly (names sort by date). Older ones go to Drive trash.\nconst cfg = $('Config').first().json;\nconst files = $('List Existing Backups').all().map(i => i.json).filter(f => f.id && f.name)\n  .concat($input.all().map((i, idx) => ({ id: i.json.id, name: $('Plan Uploads').all()[idx].json.fileName })));\nconst old = (prefix, keep) => files.filter(f => f.name.startsWith(prefix))\n  .sort((a, b) => b.name.localeCompare(a.name)).slice(keep);\nreturn [...old('vw_daily_', cfg.keepDaily), ...old('vw_monthly_', cfg.keepMonthly)]\n  .map(f => ({ json: { id: f.id, name: f.name } }));"
+      }
+    },
+    {
+      "name": "Delete Old Backups",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2170,
+        400
+      ],
+      "parameters": {
+        "resource": "file",
+        "operation": "deleteFile",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.id }}"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Notify Success",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        1930,
+        580
+      ],
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=✅ Vaultwarden backup exported to Google Drive: {{ $('Plan Uploads').all().map(i => i.json.fileName).join(', ') }}",
+        "options": {}
+      },
+      "executeOnce": true,
+      "disabled": true
+    },
+    {
+      "name": "Notify Failure",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        1930,
+        760
+      ],
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=❌ Vaultwarden backup export FAILED: {{ $json.error?.message || $json.error || $json.stderr || 'unknown error' }}",
+        "options": {}
+      },
+      "disabled": true
+    },
+    {
+      "name": "Note 9a08",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        20
+      ],
+      "parameters": {
+        "content": "## What it does\n`backup.sh` on the Vaultwarden VM (10.0.0.62) writes `Backups/vw-data-MM-DD-YY.tar.gz` at 00:00. At 01:00 this grabs the newest one over SSH/SFTP and uploads it to Google Drive.\n\n## Setup\n1. **SSH credential** (both SSH nodes): host `10.0.0.62`, port 22, user `backupuser`.\n2. **Google Drive OAuth2** credential on the 3 Drive nodes.\n3. **Config** `driveFolderId`: last part of drive.google.com/drive/folders/**<id>**.\n4. Discord Webhook credential.\n\n## Retention (on Drive)\n`vw_daily_YYYY-MM-DD` newest **5** kept, `vw_monthly_YYYY-MM` newest **1** kept. Old files go to Drive trash. Change `keepDaily` / `keepMonthly` in Config.",
+        "width": 2160,
+        "height": 340,
+        "color": 4
+      }
+    }
+  ],
+  "connections": {
+    "Daily 01:00": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Find Latest Backup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Latest Backup": {
+      "main": [
+        [
+          {
+            "node": "Download Backup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Backup": {
+      "main": [
+        [
+          {
+            "node": "List Existing Backups",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Existing Backups": {
+      "main": [
+        [
+          {
+            "node": "Plan Uploads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Uploads": {
+      "main": [
+        [
+          {
+            "node": "Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Pick Old Backups",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Old Backups": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Backups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

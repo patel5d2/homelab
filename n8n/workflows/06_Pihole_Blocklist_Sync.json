@@ -1,0 +1,320 @@
+{
+  "name": "Pi-hole - Blocklist Sync (weekly, v6 API)",
+  "nodes": [
+    {
+      "name": "Sunday 04:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        400
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 4 * * 0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        490,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ffbeeec2-067f-4f30-b951-b765b734fc74",
+              "name": "piholeUrl",
+              "value": "http://10.0.0.226",
+              "type": "string"
+            },
+            {
+              "id": "a9289144-3ee6-4fef-814d-8c3a03fe84a5",
+              "name": "piholePassword",
+              "value": "CHANGE_ME_APP_PASSWORD",
+              "type": "string"
+            },
+            {
+              "id": "15867c5f-9905-4cbe-a25e-02174943f9dc",
+              "name": "blocklists",
+              "value": "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\nhttps://big.oisd.nl",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Pi-hole Login",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        730,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.piholeUrl }}/api/auth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ password: $('Config').first().json.piholePassword }) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "name": "Split Lists",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        970,
+        400
+      ],
+      "parameters": {
+        "jsCode": "return $('Config').first().json.blocklists.split(/\\s+/).filter(Boolean).map(address => ({ json: { address } }));"
+      }
+    },
+    {
+      "name": "Add Blocklist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1210,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.piholeUrl }}/api/lists?type=block",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FTL-SID",
+              "value": "={{ $('Pi-hole Login').first().json.session.sid }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ address: $json.address, comment: 'managed by n8n', groups: [0], enabled: true }) }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Summarize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const res = $input.all().map(i => i.json.statusCode);\nreturn [{ json: { added: res.filter(s => s >= 200 && s < 300).length,\n                  existing: res.filter(s => s === 400 || s === 409).length,\n                  failed: res.filter(s => !s || (s >= 300 && s !== 400 && s !== 409)).length } }];"
+      }
+    },
+    {
+      "name": "Run Gravity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1690,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.piholeUrl }}/api/action/gravity",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FTL-SID",
+              "value": "={{ $('Pi-hole Login').first().json.session.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 600000,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Pi-hole Logout",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1930,
+        400
+      ],
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ $('Config').first().json.piholeUrl }}/api/auth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-FTL-SID",
+              "value": "={{ $('Pi-hole Login').first().json.session.sid }}"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "name": "Notify Discord",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        2170,
+        400
+      ],
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=🛡️ Pi-hole blocklist sync done — added {{ $('Summarize').first().json.added }}, already present {{ $('Summarize').first().json.existing }}, failed {{ $('Summarize').first().json.failed }}. Gravity updated.",
+        "options": {}
+      }
+    },
+    {
+      "name": "Note c039",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        20
+      ],
+      "parameters": {
+        "content": "## What changed\nPi-hole lists are added by **URL** (adlist) then gravity is rebuilt — the old version tried to stuff the whole file into a query string.\n\n## Setup\n1. **Config** `blocklists`: one URL per line.\n2. **Config**: `piholeUrl` (e.g. `http://pi.hole`), `piholePassword` (create an *app password* in Pi-hole → Settings → Web interface/API).\nTargets the **Pi-hole v6 REST API** (`/admin/api.php` from v5 no longer exists).\n3. **Notify Discord**: Discord Webhook credential.",
+        "width": 2160,
+        "height": 340,
+        "color": 4
+      }
+    }
+  ],
+  "connections": {
+    "Sunday 04:00": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Pi-hole Login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pi-hole Login": {
+      "main": [
+        [
+          {
+            "node": "Split Lists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Lists": {
+      "main": [
+        [
+          {
+            "node": "Add Blocklist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Blocklist": {
+      "main": [
+        [
+          {
+            "node": "Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize": {
+      "main": [
+        [
+          {
+            "node": "Run Gravity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Gravity": {
+      "main": [
+        [
+          {
+            "node": "Pi-hole Logout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pi-hole Logout": {
+      "main": [
+        [
+          {
+            "node": "Notify Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -1,0 +1,216 @@
+{
+  "name": "Proxmox - VM Watchdog (auto-start + Discord)",
+  "nodes": [
+    {
+      "name": "Every 5 min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        400
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 * * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        490,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5779c1d5-fc4f-4797-8234-a63753616a9d",
+              "name": "proxmoxHost",
+              "value": "10.0.0.190:8006",
+              "type": "string"
+            },
+            {
+              "id": "52f097e2-95bb-45a6-9715-57f1379b9398",
+              "name": "nodeName",
+              "value": "pve",
+              "type": "string"
+            },
+            {
+              "id": "f9afcb2d-6396-4dc2-ab96-38cc2f289409",
+              "name": "vmid",
+              "value": "200",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Check VM Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        730,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $('Config').first().json.proxmoxHost }}/api2/json/nodes/{{ $('Config').first().json.nodeName }}/qemu/{{ $('Config').first().json.vmid }}/status/current",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "name": "VM not running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        970,
+        400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "4fdc1a80-49b0-4cc1-b58d-c891cd91d5ed",
+              "leftValue": "={{ $json.data.status }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              },
+              "rightValue": "running"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Start VM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1210,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $('Config').first().json.proxmoxHost }}/api2/json/nodes/{{ $('Config').first().json.nodeName }}/qemu/{{ $('Config').first().json.vmid }}/status/start",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "name": "Notify Discord",
+      "type": "n8n-nodes-base.discord",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        400
+      ],
+      "parameters": {
+        "authentication": "webhook",
+        "content": "=⚠️ Proxmox VM **{{ $('Config').first().json.vmid }}** on `{{ $('Config').first().json.nodeName }}` was `{{ $('Check VM Status').first().json.data.status }}` — start requested.\nTask: `{{ $json.data }}`",
+        "options": {}
+      }
+    },
+    {
+      "name": "Note 2aff",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        20
+      ],
+      "parameters": {
+        "content": "## Setup\n1. **Config** node: set `proxmoxHost` (host:8006), `nodeName`, `vmid`.\n2. **Check VM Status** + **Start VM**: create one *Header Auth* credential\n   - Name: `Authorization`\n   - Value: `PVEAPIToken=user@pam!tokenid=SECRET`\n   - Token needs `VM.Audit` + `VM.PowerMgmt` on the VM.\n3. **Notify Discord**: Discord *Webhook* credential.\nSelf-signed Proxmox cert is allowed (`allowUnauthorizedCerts`).",
+        "width": 1440,
+        "height": 340,
+        "color": 4
+      }
+    }
+  ],
+  "connections": {
+    "Every 5 min": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Check VM Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check VM Status": {
+      "main": [
+        [
+          {
+            "node": "VM not running?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VM not running?": {
+      "main": [
+        [
+          {
+            "node": "Start VM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start VM": {
+      "main": [
+        [
+          {
+            "node": "Notify Discord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

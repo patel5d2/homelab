@@ -1,0 +1,133 @@
+{
+  "name": "Glance - Container Status Endpoint (Portainer -> Glance custom-api)",
+  "nodes": [
+    {
+      "name": "Glance Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        250,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "glance/containers",
+        "responseMode": "lastNode",
+        "options": {},
+        "authentication": "headerAuth"
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        490,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e7447165-b754-49bd-ad7f-921ccc554fdd",
+              "name": "portainerHost",
+              "value": "10.0.0.62:9443",
+              "type": "string"
+            },
+            {
+              "id": "fcdd73f1-9567-44d4-8e95-bf50c14c8dc8",
+              "name": "endpointId",
+              "value": "1",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "List Containers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        730,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://{{ $('Config').first().json.portainerHost }}/api/endpoints/{{ $('Config').first().json.endpointId }}/docker/containers/json?all=true",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "name": "Build Glance Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        970,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const containers = $input.all().map(i => i.json).filter(c => c.Id).map(c => ({\n  name: (c.Names?.[0] || c.Id.slice(0, 12)).replace(/^\\//, ''),\n  state: c.State,\n  status: c.Status,\n  image: c.Image,\n}));\ncontainers.sort((a, b) => a.name.localeCompare(b.name));\nreturn [{ json: {\n  total: containers.length,\n  running: containers.filter(c => c.state === 'running').length,\n  containers,\n} }];"
+      }
+    },
+    {
+      "name": "Note 69f2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        20
+      ],
+      "parameters": {
+        "content": "## Why it changed\nGlance has **no push API** — it *pulls*. This workflow is now an endpoint Glance polls.\n\n## Setup\n1. **Config**: `portainerHost`, `endpointId`.\n2. **List Containers**: Header Auth credential `X-API-Key` = Portainer access token.\n3. **Glance Webhook**: Header Auth credential `X-Glance-Key` = random secret.\n4. Add to glance.yml:\n```yaml\n- type: custom-api\n  title: Containers\n  cache: 2m\n  url: https://service.example.com/webhook/glance/containers\n  headers:\n    X-Glance-Key: ${N8N_GLANCE_KEY}\n  template: |\n    <p>{{ .JSON.Int \"running\" }} / {{ .JSON.Int \"total\" }} running</p>\n    <ul class=\"list\">{{ range .JSON.Array \"containers\" }}\n      <li>{{ .String \"name\" }} — {{ .String \"state\" }}</li>{{ end }}\n    </ul>\n```",
+        "width": 960,
+        "height": 340,
+        "color": 4
+      }
+    }
+  ],
+  "connections": {
+    "Glance Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "List Containers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Containers": {
+      "main": [
+        [
+          {
+            "node": "Build Glance Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

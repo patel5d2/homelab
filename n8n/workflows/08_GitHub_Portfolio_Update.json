@@ -1,0 +1,154 @@
+{
+  "name": "GitHub -> Portfolio Auto-Update (Notion + X)",
+  "nodes": [
+    {
+      "name": "GitHub Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        250,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "github-portfolio-CHANGE_ME_RANDOM",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        490,
+        400
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "07b1dc62-a2d7-4e19-a2e8-afc46a4c55b2",
+              "name": "notionPageId",
+              "value": "PASTE_NOTION_PAGE_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Extract Push",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        730,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const { headers, body } = $('GitHub Webhook').first().json;\nconst isPush = headers['x-github-event'] === 'push';\nconst repo = body.repository || {};\nconst onDefault = body.ref === `refs/heads/${repo.default_branch}`;\nif (!isPush || !onDefault || !body.head_commit) return [];\nreturn [{ json: {\n  repo: repo.full_name,\n  repoUrl: repo.html_url,\n  commitMsg: body.head_commit.message.split('\\n')[0],\n  commitUrl: body.head_commit.url,\n} }];"
+      }
+    },
+    {
+      "name": "Update Notion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        970,
+        400
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $('Config').first().json.notionPageId }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { 'Last Updated': { date: { start: $now.toISO() } }, 'Latest Commit': { rich_text: [ { text: { content: $json.repo + ': ' + $json.commitMsg, link: { url: $json.commitUrl } } } ] } } }) }}",
+        "options": {},
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi"
+      }
+    },
+    {
+      "name": "Post to X",
+      "type": "n8n-nodes-base.twitter",
+      "typeVersion": 2,
+      "position": [
+        970,
+        580
+      ],
+      "parameters": {
+        "text": "=🚀 Updated {{ $('Extract Push').first().json.repo }} — {{ $('Extract Push').first().json.commitMsg }} {{ $('Extract Push').first().json.repoUrl }}",
+        "additionalFields": {}
+      },
+      "disabled": true
+    },
+    {
+      "name": "Note fb4a",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        200,
+        20
+      ],
+      "parameters": {
+        "content": "## Setup\n1. GitHub repo → Settings → Webhooks → Payload URL:\n   `https://service.example.com/webhook/github-portfolio-CHANGE_ME_RANDOM` (content type JSON, push events).\n   The random path is the shared secret — keep it private.\n2. **Update Notion**: set auth to *Predefined → Notion API* credential; share the page with the integration. Page needs a **Last Updated** (date) and **Latest Commit** (text) property.\n3. **Config**: `notionPageId`.\n4. **Post to X** is disabled — add an X OAuth2 credential and enable it if wanted.\nOnly pushes to the default branch are processed.",
+        "width": 960,
+        "height": 340,
+        "color": 4
+      }
+    }
+  ],
+  "connections": {
+    "GitHub Webhook": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Extract Push",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Push": {
+      "main": [
+        [
+          {
+            "node": "Update Notion",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Post to X",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
