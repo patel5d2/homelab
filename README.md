@@ -31,7 +31,16 @@ Public access goes through **Cloudflare Tunnel**; nothing is port-forwarded on t
 
 ## Infrastructure as code — `terraform/`
 
-All guests are described with the [`bpg/proxmox`](https://registry.terraform.io/providers/bpg/proxmox) provider.
+One Terraform stack per layer, each with its own state and credentials:
+
+| Stack | Provider | Manages |
+|---|---|---|
+| `proxmox` | [bpg/proxmox](https://registry.terraform.io/providers/bpg/proxmox) | every VM and LXC: CPU, RAM, tags, start-on-boot |
+| `uptime-kuma` | [breml/uptimekuma](https://registry.terraform.io/providers/breml/uptimekuma) | every monitor |
+| `pihole` | [lukaspustina/pihole](https://registry.terraform.io/providers/lukaspustina/pihole) | local DNS names (`*.home.arpa`) for each service |
+| `vaultwarden`, `proxy` | [kreuzwerker/docker](https://registry.terraform.io/providers/kreuzwerker/docker) over SSH | Docker services (in progress) |
+
+The Proxmox guests are described with the bpg/proxmox provider.
 Existing VMs and containers are adopted with Terraform **import blocks**, so the code matches reality without rebuilding anything:
 
 ```hcl
@@ -45,7 +54,7 @@ import {
 Sizing (CPU, RAM), tags and start-on-boot are managed in code. Disks and NICs are in `ignore_changes`, so a plan can never shrink or recreate a disk.
 
 ```bash
-cd terraform
+cd terraform/proxmox
 export TF_VAR_proxmox_api_token='terraform@pve!tf=<secret>'
 terraform init && terraform plan
 ```
